@@ -8,6 +8,7 @@ import AmapRouteView from '../components/common/AmapRouteView';
 import OverlapCalcPanel from '../components/common/OverlapCalcPanel';
 import { loadFlightLine, saveFlightLine, splitSorties } from '../utils/db';
 import { newId } from '../utils/id';
+import { useAssetStore } from '../stores/assetStore';
 import type { FlightLine } from '../types/flightline';
 import type { Waypoint } from '../types/waypoint';
 
@@ -34,6 +35,7 @@ export default function RoutePlanner() {
   const [savedText, setSavedText] = useState('');
   const [error, setError] = useState('');
   const metrics = useRouteMetrics(id, params);
+  const resetForRouteChange = useAssetStore((s) => s.resetForRouteChange);
 
   useEffect(() => {
     if (!id) return;
@@ -74,7 +76,12 @@ export default function RoutePlanner() {
       updatedAt: Date.now(),
     };
     await saveFlightLine(line);
-    setSavedText(`已保存 ${new Date(line.updatedAt).toLocaleString('zh-CN')}`);
+    const needReconfirm = await resetForRouteChange(mission.id);
+    setSavedText(
+      `已保存 ${new Date(line.updatedAt).toLocaleString('zh-CN')}${
+        needReconfirm > 0 ? `，${needReconfirm} 张未归档成果需重新确认` : ''
+      }`,
+    );
   };
 
   const pickPoint = async (lng: number, lat: number) => {

@@ -1,6 +1,6 @@
 import { Button, Card, Checkbox, Empty, Space, Tag, Typography } from 'antd';
 import { AimOutlined } from '@ant-design/icons';
-import type { ImageAsset, ImageQuality } from '../../types/imageasset';
+import { STATUS_COLOR, type AssetStatus, type ImageAsset, type ImageQuality } from '../../types/imageasset';
 
 export interface AssetGridProps {
   assets: ImageAsset[];
@@ -19,7 +19,7 @@ const QUALITY_COLOR: Record<ImageQuality, string> = {
 };
 
 /**
- * 成果影像格子：缩略图、片号、GSD、质量角标与多选。
+ * 成果影像格子：缩略图、片号、批次、GSD、质量与状态角标与多选。
  * 被成果编目页（/missions/:id/assets）消费。
  */
 export default function AssetGrid({
@@ -58,12 +58,16 @@ export default function AssetGrid({
       >
         {assets.map((asset) => {
           const selected = selectedIds.includes(asset.id);
+          const conflict = asset.status === '冲突';
           return (
             <Card
               key={asset.id}
               size="small"
               hoverable
-              style={{ borderColor: selected ? '#1677ff' : undefined }}
+              style={{
+                borderColor: conflict ? '#ff4d4f' : selected ? '#1677ff' : undefined,
+                boxShadow: conflict ? '0 0 0 1px rgba(255,77,79,0.25)' : undefined,
+              }}
               styles={{ body: { padding: 8 } }}
             >
               <div style={{ position: 'relative' }}>
@@ -75,13 +79,23 @@ export default function AssetGrid({
                 <div style={{ position: 'absolute', top: 4, left: 4 }}>
                   <Checkbox checked={selected} onChange={() => onToggle(asset.id)} />
                 </div>
-                <div style={{ position: 'absolute', top: 4, right: 4 }}>
-                  <Tag color={QUALITY_COLOR[asset.quality]}>{asset.quality}</Tag>
+                <div style={{ position: 'absolute', top: 4, right: 4, display: 'flex', gap: 4 }}>
+                  <Tag color={QUALITY_COLOR[asset.quality]} style={{ marginInlineEnd: 0 }}>
+                    {asset.quality}
+                  </Tag>
+                </div>
+                <div style={{ position: 'absolute', bottom: 4, left: 4 }}>
+                  <Tag color={STATUS_COLOR[asset.status as AssetStatus]} style={{ marginInlineEnd: 0 }}>
+                    {asset.status}
+                  </Tag>
                 </div>
               </div>
               <Typography.Text strong style={{ display: 'block', marginTop: 6 }}>
                 {asset.imageNo}
               </Typography.Text>
+              <Tag color="geekblue" style={{ marginTop: 4 }}>
+                {asset.batchNo}
+              </Tag>
               <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
                 GSD {asset.gsd} cm/px · 重叠 {asset.overlap}% · 倾角 {asset.tiltAngle}°
               </Typography.Text>

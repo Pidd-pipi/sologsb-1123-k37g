@@ -82,7 +82,7 @@ sologsb-1123/
 | `/missions` | 任务台账：按测区/机型/飞行日期区间/状态筛选，显示航线数、预计张数与成果条目数 | Mission |
 | `/missions/:id/route` | 航线规划主视图：地图/网格绘制测区与航点折线，右侧参数面板改航高/航速/重叠率，实时回算 GSD、航线间距、预计张数与耗时 | Mission、Waypoint、FlightLine |
 | `/missions/:id/waypoints` | 航点明细：经纬度粘贴导入、批量改高度、上下移与拖拽换序、单点视场预览 | Waypoint |
-| `/missions/:id/assets` | 成果影像编目：卡片格子列出片号/缩略图/GSD/质量，多选标记质量、定位到图、导出清单 | ImageAsset |
+| `/missions/:id/assets` | 成果影像编目：导入架次清单（片号/时间/位置/GSD/重叠度/质量），按批次管理、冲突标红、待确认重新确认，多选标记质量、定位到图、只导出确认结果 | ImageAsset |
 | `/settings/camera` | 相机与传感器参数预设管理，选定预设后带入任务的焦距/像元/传感器 | CameraPreset、Mission |
 
 `/` 重定向到 `/missions`，未匹配路由同样兜底到 `/missions`。
@@ -97,8 +97,10 @@ sologsb-1123/
 
 ## 数据存储说明
 
-- 数据库名 `gbdronemap`，当前结构版本 **v2**（`localStorage['gbdronemap:db-version']` 记录）。
+- 数据库名 `gbdronemap`，当前结构版本 **v3**（`localStorage['gbdronemap:db-version']` 记录）。
 - 六张表：`missions`（任务）、`waypoints`（航点）、`lines`（航线参数）、`assets`（成果影像条目）、`thumbs`（**缩略图单独建表**，dataUrl）、`presets`（相机预设）。
+- 成果条目带 `batchId`/`batchNo`（架次批次）与 `status`（`待确认`/`已确认`/`冲突`/`已归档`）：同批次重复导入不新增；不同批次同片号且位置或时间不同列为冲突；人工确认的质量不被覆盖；航线参数改动后未归档成果回到待确认，已归档与冲突保留原值；导出只带确认结果。
 - v1 → v2 迁移：为老任务补 `areaPolygon`/传感器默认值，为航线补 `updatedAt`/`batteryCount`，并新增索引。
+- v2 → v3 迁移：为成果条目补 `batchId`/`batchNo`/`status`（老数据归为「初始编目」批次、状态「已确认」），并新增 `batchId`/`status` 索引。
 - 容器无状态、不挂载命名卷；清空站点数据即回到初始示范数据。
 - 首次打开灌入 2 个示范任务、5 个航点、2 条航线参数、6 条成果影像条目（含缩略图）与 3 套相机预设。

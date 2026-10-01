@@ -6,7 +6,7 @@ import { makeThumbDataUrl, type AssetThumb, type ImageAsset } from '../types/ima
 import { newId } from './id';
 
 export const DB_NAME = 'gbdronemap';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbdronemap:db-version';
 
 class DroneMapDB extends Dexie {
@@ -53,6 +53,26 @@ class DroneMapDB extends Dexie {
           .modify((row: any) => {
             if (row.updatedAt === undefined) row.updatedAt = Date.now();
             if (row.batteryCount === undefined) row.batteryCount = 1;
+          });
+      });
+    // v2 → v3：成果条目增加架次批次与状态字段（批次号、状态）
+    this.version(3)
+      .stores({
+        missions: 'id, missionNo, areaName, droneModel, flightDate, status, purpose, createdAt',
+        waypoints: 'id, missionId, seq, action, altitude',
+        lines: 'id, missionId, lineNo, updatedAt',
+        assets: 'id, missionId, imageNo, quality, shotAt, batchId, status',
+        thumbs: 'id, missionId',
+        presets: 'id, name, cameraModel',
+      })
+      .upgrade(async (tx) => {
+        await tx
+          .table('assets')
+          .toCollection()
+          .modify((row: any) => {
+            if (row.batchId === undefined) row.batchId = 'batch_seed';
+            if (row.batchNo === undefined) row.batchNo = '初始编目';
+            if (row.status === undefined) row.status = '已确认';
           });
       });
   }
@@ -253,6 +273,9 @@ export async function ensureSeedData(): Promise<void> {
       shotAt: now - 30 * day + index * 12000,
       quality,
       folder: `/DM-2024-018/100MEDIA`,
+      batchId: 'batch_seed',
+      batchNo: '初始编目',
+      status: '已确认',
     });
     thumbs.push({ id, missionId: missionA, dataUrl: makeThumbDataUrl(`IMG_${1001 + index}`, quality, lng, lat) });
   });
