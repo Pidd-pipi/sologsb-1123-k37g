@@ -6,7 +6,7 @@ import { makeThumbDataUrl, type AssetThumb, type ImageAsset } from '../types/ima
 import { newId } from './id';
 
 export const DB_NAME = 'gbdronemap';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbdronemap:db-version';
 
 class DroneMapDB extends Dexie {
@@ -55,6 +55,36 @@ class DroneMapDB extends Dexie {
             if (row.batteryCount === undefined) row.batteryCount = 1;
           });
       });
+    // v3：成果影像接入架次清单（批次/架次/确认状态/冲突对/航线参数版本）
+    this.version(3)
+      .stores({
+        missions: 'id, missionNo, areaName, droneModel, flightDate, status, purpose, createdAt',
+        waypoints: 'id, missionId, seq, action, altitude',
+        lines: 'id, missionId, lineNo, updatedAt',
+        assets: 'id, missionId, imageNo, quality, shotAt, batchId, status, conflictWith',
+        thumbs: 'id, missionId',
+        presets: 'id, name, cameraModel',
+      })
+      .upgrade(async (tx) => {
+        const lineRows: FlightLine[] = await tx.table('lines').toCollection().toArray();
+        const lineVersionOf = new Map<string, number>();
+        lineRows.forEach((l: any) => {
+          lineVersionOf.set(l.missionId, Number(l.updatedAt ?? 0));
+        });
+        await tx
+          .table('assets')
+          .toCollection()
+          .modify((row: any) => {
+            if (!row.batchId) row.batchId = 'LEGACY';
+            if (row.importedAt === undefined) row.importedAt = Number(row.shotAt ?? Date.now());
+            if (row.status !== '待确认' && row.status !== '已确认' && row.status !== '已归档') {
+              row.status = '已确认';
+            }
+            if (row.qualityTouched === undefined) row.qualityTouched = true;
+            if (row.lineVersion === undefined) row.lineVersion = lineVersionOf.get(row.missionId) ?? 0;
+            if (!row.conflictWith) delete row.conflictWith;
+          });
+      });
   }
 }
 
@@ -99,6 +129,21 @@ export function splitSorties(line: FlightLine): { sortie: number; photos: number
     photos: photosPer,
     durationMin: durationPer,
   }));
+}
+
+/** 影响成果确认的航线参数签名：改动后未归档成果需重新确认 */
+export function lineSignature(line: Pick<FlightLine, 'spacing' | 'photoInterval' | 'overlapForward' | 'overlapSide' | 'gsd' | 'estPhotos' | 'estDuration' | 'batteryCount' | 'heading'>): string {
+  return [
+    line.spacing,
+    line.photoInterval,
+    line.overlapForward,
+    line.overlapSide,
+    line.gsd,
+    line.estPhotos,
+    line.estDuration,
+    line.batteryCount,
+    line.heading,
+  ].join('|');
 }
 
 /** 首次进入灌入示范任务、航点、航线参数与成果影像条目 */
@@ -235,27 +280,78 @@ export async function ensureSeedData(): Promise<void> {
 
   const assets: ImageAsset[] = [];
   const thumbs: AssetThumb[] = [];
-  const qualities: ImageAsset['quality'][] = ['合格', '合格', '模糊', '合格', '过曝', '合格'];
-  qualities.forEach((quality, index) => {
-    const id = newId('asset');
+  const lineVersionA = lines[0].updatedAt;
+  const batch1 = 'B-20240912-01';
+  const batch2 = 'B-20240912-02';
+  const importedAt1 = lineVersionA + 2 * 3600 * 1000;
+  const importedAt2 = lineVersionA + 6 * 3600 * 1000;
+  // 预先分配 id，便于冲突对互相引用
+  const ids = Array.from({ length: 6 }, () => newId('asset'));
+
+  /** 建一条成果影像（v3：带批次、架次、确认状态与航线参数版本） */
+  const pushAsset = (
+    id: string,
+    batchId: string,
+    importedAt: number,
+    sortie: number,
+    index: number,
+    extra: Partial<ImageAsset>,
+  ) => {
     const lng = 116.3916 + index * 0.0012;
     const lat = 39.9071 - (index % 2) * 0.0009;
-    assets.push({
+    const quality: ImageAsset['quality'] = extra.quality ?? '合格';
+    const imageNo = extra.imageNo ?? `IMG_${String(1001 + index)}`;
+    const asset: ImageAsset = {
       id,
       missionId: missionA,
-      imageNo: `IMG_${String(1001 + index)}`,
-      lng,
-      lat,
+      imageNo,
+      lng: extra.lng ?? lng,
+      lat: extra.lat ?? lat,
       altitude: 120,
       gsd: 3.22,
       overlap: 76 - index,
       tiltAngle: 2 + index,
-      shotAt: now - 30 * day + index * 12000,
+      shotAt: extra.shotAt ?? now - 30 * day + index * 12000,
       quality,
-      folder: `/DM-2024-018/100MEDIA`,
-    });
-    thumbs.push({ id, missionId: missionA, dataUrl: makeThumbDataUrl(`IMG_${1001 + index}`, quality, lng, lat) });
+      folder: `/DM-2024-018/S${sortie}/100MEDIA`,
+      batchId,
+      sortie,
+      importedAt,
+      status: extra.status ?? '待确认',
+      qualityTouched: extra.qualityTouched ?? false,
+      lineVersion: extra.lineVersion ?? lineVersionA,
+      conflictWith: extra.conflictWith,
+    };
+    assets.push(asset);
+    thumbs.push({ id, missionId: missionA, dataUrl: makeThumbDataUrl(imageNo, quality, asset.lng, asset.lat) });
+  };
+
+  // 第一架次（01 批次）：已确认 / 已归档 / 航线改动后待重认 / 待确认冲突片
+  pushAsset(ids[0], batch1, importedAt1, 1, 0, { status: '已确认', qualityTouched: true, quality: '合格' });
+  pushAsset(ids[1], batch1, importedAt1, 1, 1, { status: '已归档', qualityTouched: true, quality: '合格' });
+  pushAsset(ids[2], batch1, importedAt1, 1, 2, {
+    status: '待确认',
+    quality: '模糊',
+    qualityTouched: false,
+    lineVersion: lineVersionA - 5 * day, // 早于当前航线参数 → 需重新确认
   });
+  pushAsset(ids[3], batch1, importedAt1, 1, 3, {
+    status: '待确认',
+    quality: '合格',
+    qualityTouched: false,
+    conflictWith: ids[4],
+  });
+  // 第二架次（02 批次）：同片号 IMG_1004 位置/时间不一致 → 冲突；另带一条已确认过曝片
+  pushAsset(ids[4], batch2, importedAt2, 2, 3, {
+    status: '待确认',
+    quality: '合格',
+    qualityTouched: false,
+    lng: 116.3916 + 3 * 0.0012 + 0.0006,
+    lat: 39.9071 - 0.0014,
+    shotAt: now - 30 * day + 3 * 12000 + 22 * 60000,
+    conflictWith: ids[3],
+  });
+  pushAsset(ids[5], batch2, importedAt2, 2, 4, { status: '已确认', quality: '过曝', qualityTouched: true });
 
   const presets: CameraPreset[] = [
     {

@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Alert, Button, Card, Col, Row, Space, Table, Tag, Typography, type TableProps } from 'antd';
 import { useMissionStore } from '../stores/missionStore';
 import { useWaypointStore } from '../stores/waypointStore';
+import { useAssetStore } from '../stores/assetStore';
 import { useRouteMetrics, DEFAULT_ROUTE_PARAMS, type RouteParams } from '../hooks/useRouteMetrics';
 import AmapRouteView from '../components/common/AmapRouteView';
 import OverlapCalcPanel from '../components/common/OverlapCalcPanel';
-import { loadFlightLine, saveFlightLine, splitSorties } from '../utils/db';
+import { lineSignature, loadFlightLine, saveFlightLine, splitSorties } from '../utils/db';
 import { newId } from '../utils/id';
 import type { FlightLine } from '../types/flightline';
 import type { Waypoint } from '../types/waypoint';
@@ -24,6 +25,7 @@ export default function RoutePlanner() {
   const missions = useMissionStore((s) => s.items);
   const waypoints = useWaypointStore((s) => s.items);
   const addWaypoint = useWaypointStore((s) => s.add);
+  const invalidateForLineChange = useAssetStore((s) => s.invalidateForLineChange);
   const mission = missions.find((m) => m.id === id);
   const missionWaypoints = useMemo(
     () => waypoints.filter((w) => w.missionId === id).sort((a, b) => a.seq - b.seq),
@@ -33,12 +35,15 @@ export default function RoutePlanner() {
   const [params, setParams] = useState<RouteParams>({ ...DEFAULT_ROUTE_PARAMS });
   const [savedText, setSavedText] = useState('');
   const [error, setError] = useState('');
+  /** 当前已保存的航线参数（保存时对比签名，判定成果是否需要重新确认） */
+  const existingLineRef = useRef<FlightLine | undefined>(undefined);
   const metrics = useRouteMetrics(id, params);
 
   useEffect(() => {
     if (!id) return;
     void loadFlightLine(id).then((line) => {
       if (!line) return;
+      existingLineRef.current = line;
       setParams((prev) => ({
         ...prev,
         altitude: missionWaypoints[0]?.altitude ?? prev.altitude,
@@ -58,8 +63,9 @@ export default function RoutePlanner() {
 
   const onSave = async () => {
     if (!mission) return;
+    const prev = existingLineRef.current;
     const line: FlightLine = {
-      id: newId('line'),
+      id: prev?.id ?? newId('line'),
       missionId: mission.id,
       lineNo: 1,
       spacing: metrics.spacing,
@@ -74,7 +80,15 @@ export default function RoutePlanner() {
       updatedAt: Date.now(),
     };
     await saveFlightLine(line);
-    setSavedText(`已保存 ${new Date(line.updatedAt).toLocaleString('zh-CN')}`);
+    existingLineRef.current = line;
+    // 航线参数改动后，未归档且非冲突成果需重新确认；已归档与冲突记录保留原值
+    const changed = prev ? lineSignature(prev) !== lineSignature(line) : false;
+    if (changed) {
+      const count = await invalidateForLineChange(mission.id, line.updatedAt);
+      setSavedText(`已保存 ${new Date(line.updatedAt).toLocaleString('zh-CN')}，${count} 条未归档成果需到成果页重新确认`);
+    } else {
+      setSavedText(`已保存 ${new Date(line.updatedAt).toLocaleString('zh-CN')}`);
+    }
   };
 
   const pickPoint = async (lng: number, lat: number) => {
